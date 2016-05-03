@@ -1,11 +1,19 @@
-FROM ubuntu:latest
+FROM debian:jessie
 
-MAINTAINER David Weiner<davidweiner@dreamfactory.com>
+# Update the parent image.  Not really necessary but makes it easier
+# checking for security holes later.
+RUN apt-get update && apt-get -y dist-upgrade && rm -rf /var/lib/apt/lists/*
 
-ENV DEBIAN_FRONTEND noninteractive
-
+# Telnet is not strictly necessary but it makes debugging easier (when you can't contact the database, and so on).
 RUN apt-get update && apt-get install -y \
-    git-core curl apache2 php5 php5-common php5-cli php5-curl php5-json php5-mcrypt php5-mysqlnd php5-pgsql php5-sqlite && \
+        git-core curl apache2 php5 php5-common php5-cli php5-curl php5-json php5-mcrypt php5-mysqlnd php5-pgsql \
+        php5-sqlite telnet && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y php-pear php5-dev pkg-config && \
+    pecl install mongodb && \
+    apt-get purge -y php-pear php5-dev pkg-config && \
+    apt-get autoremove --purge -y && \
     rm -rf /var/lib/apt/lists/*
 
 # install composer
@@ -14,19 +22,19 @@ RUN curl -sS https://getcomposer.org/installer | php && \
     chmod +x /usr/local/bin/composer
 
 RUN echo "ServerName localhost" | tee /etc/apache2/conf-available/servername.conf && \
-    a2enconf servername
-
-RUN rm /etc/apache2/sites-enabled/000-default.conf
-
-RUN php5enmod mcrypt
+    a2enconf servername && \
+    rm /etc/apache2/sites-enabled/000-default.conf && \
+    echo 'extension=mongodb.so' > /etc/php5/mods-available/mongodb.ini && \
+    php5enmod mcrypt mongodb
 
 ADD dreamfactory.conf /etc/apache2/sites-available/dreamfactory.conf
-RUN a2ensite dreamfactory
-
-RUN a2enmod rewrite
+RUN a2ensite dreamfactory && \
+    a2enmod rewrite
 
 # get app src
-RUN git clone https://github.com/dreamfactorysoftware/dreamfactory.git /opt/dreamfactory
+RUN git clone https://github.com/dreamfactorysoftware/dreamfactory.git /opt/dreamfactory && \
+    cd /opt/dreamfactory && \
+    git checkout $(git tag -l | egrep -v '[a-z]' | sort -V | tail -1)
 
 WORKDIR /opt/dreamfactory
 
@@ -34,9 +42,8 @@ WORKDIR /opt/dreamfactory
 #RUN composer require "predis/predis:~1.0"
 
 # install packages
-RUN composer install
-
-RUN php artisan dreamfactory:setup --no-app-key --db_driver=mysql --df_install=Docker
+RUN composer install && \
+    php artisan dreamfactory:setup --no-app-key --db_driver=pgsql --df_install=Docker
 
 # Comment out the line above and uncomment these this line if you're building a docker image for Bluemix.  If you're
 # not using redis for your cache, change the value of --cache_driver to memcached or remove it for the standard
@@ -46,10 +53,7 @@ RUN php artisan dreamfactory:setup --no-app-key --db_driver=mysql --df_install=D
 RUN chown -R www-data:www-data /opt/dreamfactory
 
 ADD docker-entrypoint.sh /docker-entrypoint.sh
-
-# forward request and error logs to docker log collector
-RUN ln -sf /dev/stdout /var/log/apache2/access.log
-RUN ln -sf /dev/stderr /var/log/apache2/error.log
+ADD .env /opt/dreamfactory/.env
 
 # Uncomment this is you are building for Bluemix and will be using ElephantSQL
 #ENV BM_USE_URI=true
